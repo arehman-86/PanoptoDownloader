@@ -906,8 +906,9 @@ class VideoDownloader:
                     "falling back to yt-dlp for composed view only.\n"
                     "  Camera/slide streams unavailable without valid cookies.\n"
                     "  Run [bold cyan]panopto-downloader --profile eecs auth export-cookies[/bold cyan] "
-                    "on the machine where you are logged into mit.hosted.panopto.com in Chrome.[/yellow]\n"
+                    "on the machine where you are logged into mit.hosted.panopto.com in Chrome.[/yellow]"
                 )
+                console.print(f"  [dim]Debug: {err_msg}[/dim]\n")
             else:
                 console.print(f"[yellow]⚠  Stream discovery failed ({exc}) — falling back to yt-dlp.[/yellow]\n")
 
