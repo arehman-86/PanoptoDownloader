@@ -119,63 +119,37 @@ class PanoptoAPI:
         elif cookies_dict:
             for name, value in cookies_dict.items():
                 self.session.cookies.set(name, value)
-        else:
-            # No explicit cookies source — try the exported profile cookies file
-            # first (written by `auth export-cookies`). Only fall back to live
-            # browser extraction when no OAuth is configured, to avoid the
-            # Chrome-open / stale-cookie problem for API-authenticated users.
-            exported = self._find_exported_cookies(auth)
-            if exported:
-                self._load_cookies_from_file(exported)
-            elif not auth:
-                self._load_browser_cookies(browser)
-
-    @staticmethod
-    def _find_exported_cookies(auth: "Any | None") -> "Path | None":
-        """Return the exported cookies file for the auth profile, if it exists and is non-trivial."""
-        from pathlib import Path as _Path
-        config_dir = _Path("~/.config/panopto-downloader").expanduser()
-        if auth is not None:
-            profile = getattr(auth, "profile", "default")
-            profile_path = config_dir / f"cookies-{profile}.txt"
-            if profile_path.exists() and profile_path.stat().st_size > 100:
-                return profile_path
-        default_path = config_dir / "cookies.txt"
-        return default_path if default_path.exists() and default_path.stat().st_size > 100 else None
+        elif not auth:
+            # Live browser extraction only when no OAuth is configured — avoids
+            # the Chrome-open / stale-cookie problem for API-authenticated users.
+            self._load_browser_cookies(browser)
 
     def _load_cookies_from_file(self, cookies_file: Path) -> None:
         """Load cookies from Netscape format cookies.txt file.
 
-        Stores raw (domain, name, value) tuples in _raw_cookies so that
-        get_delivery_info can build an exact Cookie header filtered to the
-        target server — bypassing requests' unreliable domain matching.
-
         Args:
             cookies_file: Path to cookies.txt file.
         """
-        self._raw_cookies: list[tuple[str, str, str]] = []
         with open(cookies_file, "r") as f:
             for line in f:
                 line = line.strip()
+                # Skip comments and empty lines
                 if not line or line.startswith("#"):
                     continue
+                
                 try:
+                    # Netscape format: domain, flag, path, secure, expiration, name, value
                     parts = line.split("\t")
                     if len(parts) == 7:
                         domain, _, path, secure, expiration, name, value = parts
-                        self._raw_cookies.append((domain.lstrip("."), name, value))
+                        self.session.cookies.set(
+                            name=name,
+                            value=value,
+                            domain=domain,
+                            path=path,
+                        )
                 except Exception:
                     continue
-
-    def _cookie_header_for(self, server: str) -> str:
-        """Return a Cookie header string containing only cookies for *server*."""
-        raw = getattr(self, "_raw_cookies", [])
-        parts = [
-            f"{name}={value}"
-            for domain, name, value in raw
-            if server.endswith(domain) or domain.endswith(server)
-        ]
-        return "; ".join(parts)
 
     def _load_browser_cookies(self, browser: str = "chrome") -> None:
         """Load cookies from the specified browser using browser_cookie3."""
@@ -226,22 +200,11 @@ class PanoptoAPI:
             except Exception:
                 pass  # fall through to cookie-based attempt
 
-        # Strategy 2: explicit Cookie header built from the loaded cookies file,
-        # filtered to the target server. Using a header bypasses requests' broken
-        # domain-matching for manually-loaded cookies.
-        cookie_header = self._cookie_header_for(server)
-        headers: dict[str, str] = {
-            # Use a real browser UA — Panopto may reject python-requests UA
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-        }
-        if cookie_header:
-            headers["Cookie"] = cookie_header
+        # Strategy 2: session cookies loaded at init time (browser export or
+        # from-token).  Some Panopto instances set enough cookies when you hit
+        # the home page with a Bearer token; others need the full browser flow.
         try:
-            response = self.session.get(url, params=params, headers=headers, timeout=30)
+            response = self.session.get(url, params=params, timeout=30)
             response.raise_for_status()
             data = response.json()
         except requests.RequestException as e:
@@ -252,12 +215,8 @@ class PanoptoAPI:
         # Server returns HTTP 200 with an error body when no valid session exists.
         if "ErrorCode" in data or "LoginRedirect" in data:
             err = data.get("ErrorMessage") or "session cookie required"
-            raw = getattr(self, "_raw_cookies", [])
-            panopto_cookies = [name for domain, name, _ in raw if server.endswith(domain) or domain.endswith(server)]
             raise PanoptoAPIError(
                 f"DeliveryInfo authentication failed ({err}). "
-                f"Panopto cookies sent ({len(panopto_cookies)}): {panopto_cookies}. "
-                f"Cookie header length: {len(cookie_header)}. "
                 "Run: panopto-downloader auth export-cookies"
             )
 
