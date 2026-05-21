@@ -146,37 +146,36 @@ class PanoptoAPI:
     def _load_cookies_from_file(self, cookies_file: Path) -> None:
         """Load cookies from Netscape format cookies.txt file.
 
-        Uses MozillaCookieJar so domain matching works correctly with requests.
+        Stores raw (domain, name, value) tuples in _raw_cookies so that
+        get_delivery_info can build an exact Cookie header filtered to the
+        target server — bypassing requests' unreliable domain matching.
 
         Args:
             cookies_file: Path to cookies.txt file.
         """
-        import http.cookiejar as _cj
+        self._raw_cookies: list[tuple[str, str, str]] = []
+        with open(cookies_file, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                try:
+                    parts = line.split("\t")
+                    if len(parts) == 7:
+                        domain, _, path, secure, expiration, name, value = parts
+                        self._raw_cookies.append((domain.lstrip("."), name, value))
+                except Exception:
+                    continue
 
-        jar = _cj.MozillaCookieJar()
-        try:
-            jar.load(str(cookies_file), ignore_discard=True, ignore_expires=True)
-        except Exception:
-            # Fall back to manual parsing if MozillaCookieJar fails
-            with open(cookies_file, "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    try:
-                        parts = line.split("\t")
-                        if len(parts) == 7:
-                            domain, _, path, secure, expiration, name, value = parts
-                            self.session.cookies.set(
-                                name=name, value=value,
-                                domain=domain.lstrip("."), path=path,
-                            )
-                    except Exception:
-                        continue
-            return
-
-        for cookie in jar:
-            self.session.cookies.set_cookie(cookie)
+    def _cookie_header_for(self, server: str) -> str:
+        """Return a Cookie header string containing only cookies for *server*."""
+        raw = getattr(self, "_raw_cookies", [])
+        parts = [
+            f"{name}={value}"
+            for domain, name, value in raw
+            if server.endswith(domain) or domain.endswith(server)
+        ]
+        return "; ".join(parts)
 
     def _load_browser_cookies(self, browser: str = "chrome") -> None:
         """Load cookies from the specified browser using browser_cookie3."""
@@ -227,11 +226,15 @@ class PanoptoAPI:
             except Exception:
                 pass  # fall through to cookie-based attempt
 
-        # Strategy 2: session cookies loaded at init time (browser export or
-        # from-token).  Some Panopto instances set enough cookies when you hit
-        # the home page with a Bearer token; others need the full browser flow.
+        # Strategy 2: explicit Cookie header built from the loaded cookies file,
+        # filtered to the target server. Using a header bypasses requests' broken
+        # domain-matching for manually-loaded cookies.
+        cookie_header = self._cookie_header_for(server)
+        headers: dict[str, str] = {}
+        if cookie_header:
+            headers["Cookie"] = cookie_header
         try:
-            response = self.session.get(url, params=params, timeout=30)
+            response = self.session.get(url, params=params, headers=headers, timeout=30)
             response.raise_for_status()
             data = response.json()
         except requests.RequestException as e:
@@ -242,12 +245,10 @@ class PanoptoAPI:
         # Server returns HTTP 200 with an error body when no valid session exists.
         if "ErrorCode" in data or "LoginRedirect" in data:
             err = data.get("ErrorMessage") or "session cookie required"
-            top_keys = list(data.keys())
-            cookies_sent = [c.name for c in self.session.cookies]
+            cookie_names = [name for _, name, _ in getattr(self, "_raw_cookies", []) if server in _]
             raise PanoptoAPIError(
                 f"DeliveryInfo authentication failed ({err}). "
-                f"Response keys: {top_keys}. "
-                f"Cookies sent: {cookies_sent}. "
+                f"Panopto cookies available: {cookie_names}. "
                 "Run: panopto-downloader auth export-cookies"
             )
 
