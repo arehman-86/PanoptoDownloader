@@ -146,29 +146,37 @@ class PanoptoAPI:
     def _load_cookies_from_file(self, cookies_file: Path) -> None:
         """Load cookies from Netscape format cookies.txt file.
 
+        Uses MozillaCookieJar so domain matching works correctly with requests.
+
         Args:
             cookies_file: Path to cookies.txt file.
         """
-        with open(cookies_file, "r") as f:
-            for line in f:
-                line = line.strip()
-                # Skip comments and empty lines
-                if not line or line.startswith("#"):
-                    continue
-                
-                try:
-                    # Netscape format: domain, flag, path, secure, expiration, name, value
-                    parts = line.split("\t")
-                    if len(parts) == 7:
-                        domain, _, path, secure, expiration, name, value = parts
-                        self.session.cookies.set(
-                            name=name,
-                            value=value,
-                            domain=domain,
-                            path=path,
-                        )
-                except Exception:
-                    continue
+        import http.cookiejar as _cj
+
+        jar = _cj.MozillaCookieJar()
+        try:
+            jar.load(str(cookies_file), ignore_discard=True, ignore_expires=True)
+        except Exception:
+            # Fall back to manual parsing if MozillaCookieJar fails
+            with open(cookies_file, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    try:
+                        parts = line.split("\t")
+                        if len(parts) == 7:
+                            domain, _, path, secure, expiration, name, value = parts
+                            self.session.cookies.set(
+                                name=name, value=value,
+                                domain=domain.lstrip("."), path=path,
+                            )
+                    except Exception:
+                        continue
+            return
+
+        for cookie in jar:
+            self.session.cookies.set_cookie(cookie)
 
     def _load_browser_cookies(self, browser: str = "chrome") -> None:
         """Load cookies from the specified browser using browser_cookie3."""
