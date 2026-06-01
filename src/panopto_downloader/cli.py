@@ -1478,11 +1478,23 @@ def batch(
         sessions.sort(key=lambda s: s.start_time or "")
         console.print(f"  [green]{len(sessions)} session(s) found[/green]")
 
+        # Pre-compute safe names and disambiguate duplicates so that
+        # two Panopto sessions with the same title get distinct directories.
+        session_safe_names: list[str] = []
+        _name_seen: dict[str, int] = {}
+        for s in sessions:
+            sn = _safe_filename(s.name)
+            _name_seen[sn] = _name_seen.get(sn, 0) + 1
+            if _name_seen[sn] > 1:
+                sn = f"{sn} (recording {_name_seen[sn]})"
+            session_safe_names.append(sn)
+
         if dry_run:
             console.print(f"  [dim]Would create: {course_dir}[/dim]")
-            for s in sessions:
+            for s, sn in zip(sessions, session_safe_names):
                 prefix = f"  [{s.subfolder}]" if s.subfolder else ""
-                console.print(f"    [dim]•{prefix} {s.name}[/dim]")
+                dup_tag = f" [yellow](duplicate name → {sn})[/yellow]" if sn != _safe_filename(s.name) else ""
+                console.print(f"    [dim]•{prefix} {s.name}{dup_tag}[/dim]")
             continue
 
         course_dir.mkdir(parents=True, exist_ok=True)
@@ -1493,7 +1505,7 @@ def batch(
                 console.print(f"  [yellow]⚠  No URL for {session.name!r} — skipping[/yellow]")
                 continue
 
-            safe_name = _safe_filename(session.name)
+            safe_name = session_safe_names[si - 1]
 
             # Mirror the Panopto subfolder hierarchy on disk so that e.g.
             # Recitations, Excel Tutorials, and class sessions each get their
