@@ -1646,6 +1646,20 @@ def download_links(
         console.print("[red]No URLs found in links file.[/red]")
         raise SystemExit(1)
 
+    # Disambiguate duplicate labels so two recordings that share the same
+    # session name (e.g. a primary + backup capture of the same lecture) each
+    # get their own folder instead of the second one colliding with the first
+    # and being skipped. Mirrors the behaviour of the `batch` command.
+    disambiguated: list[tuple[str, str]] = []
+    _label_seen: dict[str, int] = {}
+    for label, url in entries:
+        safe = _safe_filename(label)
+        _label_seen[safe] = _label_seen.get(safe, 0) + 1
+        if _label_seen[safe] > 1:
+            label = f"{label} (recording {_label_seen[safe]})"
+        disambiguated.append((label, url))
+    entries = disambiguated
+
     course_dir = output_dir / folder
     course_dir.mkdir(parents=True, exist_ok=True)
 

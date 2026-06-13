@@ -68,3 +68,9 @@ temp/               # Temporary processing files
 # Cursor
 .cursor/
 
+# Personal links files & run scripts (course session IDs, classmate names)
+*_links.txt
+canvas_gap_links/
+new_courses_links/
+rerun_missing_recordings.sh
+
